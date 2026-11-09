@@ -1,0 +1,149 @@
+<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>Consolidação de Créditos de PIS e COFINS</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<style>
+body{font:14px system-ui,Segoe UI,Arial;margin:0;background:#f3f6fa;color:#1c2733}
+header{background:#1f4e79;color:#fff;padding:14px 24px}h1{font-size:18px;margin:0}header p{margin:4px 0 0;opacity:.85;font-size:12px}
+main{padding:16px 24px;max-width:1500px;margin:auto}.c{background:#fff;border:1px solid #d5dde8;border-radius:8px;padding:14px;margin-bottom:14px}
+h2{font-size:15px;margin:0 0 8px}button{background:#1f4e79;color:#fff;border:0;border-radius:5px;padding:7px 14px;cursor:pointer;margin:2px}button:hover{background:#2a65a0}
+.k{display:inline-block;background:#eef4fb;border-radius:6px;padding:8px 14px;margin:0 8px 8px 0;min-width:140px}.k b{display:block;font-size:17px}
+table.g{border-collapse:collapse;font-size:12px}.g th,.g td{border:1px solid #d5dde8;padding:3px 6px;white-space:nowrap}.g th{background:#e3ecf6;position:sticky;top:0}
+.sc{overflow:auto;max-height:480px}input{font:inherit;padding:2px 4px}input.n{width:52px}input.w{width:120px}
+.chip{display:inline-block;border:2px solid #ccd;border-radius:14px;padding:2px 10px;margin:3px;cursor:pointer;font-size:12px}.chip.on{border-color:#1f4e79;background:#dbe9f7}.chip i{display:inline-block;width:12px;height:12px;border:1px solid #888;margin-right:5px;vertical-align:middle}
+.bad{color:#b00020;font-weight:600}.ok{color:#1b7a3a}.r{text-align:right}.m{color:#556;font-size:12px}
+</style></head><body>
+<header><h1>Consolidação de Créditos de PIS (Programa de Integração Social) e COFINS (Contribuição para o Financiamento da Seguridade Social)</h1>
+<p>Estrutura do arquivo EFD (Escrituração Fiscal Digital) Contribuições mensal. Seleção pela cor de preenchimento azul; o app não valida requisitos fiscais do crédito.</p></header>
+<main>
+<section class="c"><h2>1. Importar o Excel do mês</h2><input type="file" id="f" accept=".xlsx"><div id="st" class="m" style="margin-top:6px"></div></section>
+<section class="c" id="s2" hidden><h2>2. Critérios de identificação</h2>
+<div class="m">Cores de preenchimento encontradas nas abas (clique para considerar ou não como azul):</div><div id="chips"></div>
+<p><label>Tolerância de conferência (R$) <input id="tol" class="n" value="0,02"></label> &nbsp; <label><input type="checkbox" id="ih"> Ignorar linhas ocultas</label></p>
+<details><summary><b>Seções por aba</b> (linhas, colunas, campos e alíquotas; abas 04 e 05 Outros e Resumo têm estrutura própria)</summary>
+<div class="m">Uma linha é selecionada se alguma célula entre "Col. de" e "Col. até" tiver cor azul. Sem "Col. até": usa até a última coluna com cabeçalho. Sem "Última": vai até o fim da aba. "Linha rótulo" lê o título do bloco (ex.: Resumo). Cabeçalhos manuais (separados por ;) substituem a linha de cabeçalho.</div><div id="cfg" class="sc"></div></details>
+<button id="go">Consolidar</button></section>
+<section class="c" id="s3" hidden><h2>3. Conferência e exportação</h2><div id="cards"></div><div id="ab" class="sc" style="max-height:none"></div><h2 style="margin-top:12px">Comparação com a aba Resumo</h2><div id="ck"></div>
+<h2 style="margin-top:12px">Registros</h2><p>Aba <select id="fa"></select> Busca <input id="q" size="22"> <label><input type="checkbox" id="fd"> Só divergentes</label> <label><input type="checkbox" id="fu"> Só duplicados</label> <button id="ex">Exportar Excel</button> <span id="cnt" class="m"></span></p>
+<div class="sc"><table class="g" id="tbl"></table></div></section>
+</main>
+<script>
+const TABS=['Sucata 1','Uso e consumo','Nfse','04 e 05 Outros','Locação','Imobilizado','Frete','Resumo'];
+const $=i=>document.getElementById(i),RX={},tick=()=>new Promise(r=>setTimeout(r,0));
+const at=(a,k)=>{const r=RX[k]||(RX[k]=new RegExp('(?:^|\\s)'+k+'="([^"]*)"'));const m=r.exec(a);return m&&m[1]};
+const un=s=>s.indexOf('&')<0?s:s.replace(/&(#x?[0-9a-fA-F]+|amp|lt|gt|quot|apos);/g,(m,e)=>({amp:'&',lt:'<',gt:'>',quot:'"',apos:"'"}[e]||String.fromCodePoint(e[1]=='x'?parseInt(e.slice(2),16):+e.slice(1))));
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const norm=s=>String(s??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim().toLowerCase();
+const c2n=c=>[...c.toUpperCase()].reduce((n,ch)=>n*26+ch.charCodeAt(0)-64,0);
+const n2c=n=>{let s='';while(n){const r=(n-1)%26;s=String.fromCharCode(65+r)+s;n=(n-1-r)/26}return s};
+const num=x=>typeof x=='number'?x:x==null||x===''?0:(s=>isNaN(+s)?0:+s)(String(x).includes(',')?String(x).replace(/\./g,'').replace(',','.'):String(x));
+const fm=n=>n.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+const F=[['h','Linha cabeçalho'],['a','1ª linha de dados'],['b','Última linha'],['c1','Col. de'],['c2','Col. até'],['lab','Linha rótulo'],['man','Cabeçalhos manuais'],['base','Campo base de cálculo'],['pis','Campo PIS'],['cof','Campo COFINS'],['rp','Alíquota PIS (%)'],['rc','Alíquota COFINS (%)']];
+const STD={h:3,a:4,b:'',c1:'A',c2:'',lab:'',man:'',base:'Base Pis/Cofins',pis:'Pis',cof:'Cofins',rp:1.65,rc:7.6};
+const dcfg=()=>{const C={};TABS.forEach(t=>C[t]=[{...STD}]);
+C['04 e 05 Outros']=[{...STD,b:36,c1:'C',c2:'J',base:'B.C'},{...STD,h:'',a:39,b:70,c1:'C',c2:'G',man:'Conta;Descrição;Valor;Pis;Cofins',base:'Valor',rp:0.65,rc:4}];
+C['Resumo']=[{...STD,b:5,c2:'C',lab:2,base:'Soma de Vl Mês',pis:'Soma de PIS',cof:'Soma de COFINS'},{...STD,b:5,c1:'D',c2:'F',lab:2,base:'Soma de Vl Mês',pis:'Soma de PIS',cof:'Soma de COFINS'}];return C};
+let CFG=dcfg(),SH={},SST=[],XC=[],TH=[],COLORS={},BLUE=new Set(),RECS=[],COLS=[],UC=[];
+
+function tint(hex,t){let[r,g,b]=[0,2,4].map(i=>parseInt(hex.substr(i,2),16)/255);const mx=Math.max(r,g,b),mn=Math.min(r,g,b),d=mx-mn;let h=0,s=0,l=(mx+mn)/2;
+if(d){s=l>.5?d/(2-mx-mn):d/(mx+mn);h=mx==r?((g-b)/d+6)%6:mx==g?(b-r)/d+2:(r-g)/d+4;h/=6}
+l=t<0?l*(1+t):l*(1-t)+t;const q=l<.5?l*(1+s):l+s-l*s,p=2*l-q;
+const f=x=>{x=((x%1)+1)%1;return Math.round((x<1/6?p+(q-p)*6*x:x<.5?q:x<2/3?p+(q-p)*(2/3-x)*6:p)*255).toString(16).padStart(2,'0')};
+return(f(h+1/3)+f(h)+f(h-1/3)).toUpperCase()}
+const isBlue=h=>{const[r,g,b]=[0,2,4].map(i=>parseInt(h.substr(i,2),16)/255),mx=Math.max(r,g,b),d=mx-Math.min(r,g,b);if(!d||d/mx<.06)return false;
+let H=60*(mx==r?((g-b)/d+6)%6:mx==g?(b-r)/d+2:(r-g)/d+4);return H>=190&&H<=260};
+
+function psheet(x){const R=new Map;
+for(const m of x.matchAll(/<row ([^>]*?)(?:\/>|>([\s\S]*?)<\/row>)/g)){const r=+at(m[1],'r'),f=[],v={};let c=0;
+if(m[2])for(const k of m[2].matchAll(/<c ([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)){const a=k[1],rr=at(a,'r');c=rr?c2n(rr.replace(/\d+/,'')):c+1;
+const s=at(a,'s'),col=s&&XC[+s];if(col){f.push([c,col]);COLORS[col]=(COLORS[col]||0)+1}
+const vv=k[2]&&/<v>([\s\S]*?)<\/v>/.exec(k[2]);if(vv&&c<=150){const t=at(a,'t');v[c]=t=='s'?SST[+vv[1]]:(t=='str'||t=='e'||t=='b')?un(vv[1]):+vv[1]}}
+R.set(r,{h:/hidden="1"/.test(m[1]),f,v})}return R}
+
+async function load(file){const S=t=>$('st').innerHTML=t;
+try{S('Abrindo arquivo...');const Z=await JSZip.loadAsync(file),rd=async p=>Z.file(p)?Z.file(p).async('string'):'';
+const wbx=await rd('xl/workbook.xml'),rel=await rd('xl/_rels/workbook.xml.rels'),rm={};
+for(const m of rel.matchAll(/<Relationship ([^>]*?)\/>/g))rm[at(m[1],'Id')]=at(m[1],'Target');
+const names=[...wbx.matchAll(/<sheet ([^>]*?)\/>/g)].map(m=>({n:un(at(m[1],'name')),p:'xl/'+(rm[at(m[1],'r:id')]||'').replace(/^\/?(xl\/)?/,'')}));
+const thm=await rd('xl/theme/theme1.xml'),sty=await rd('xl/styles.xml');
+TH=[...((thm.match(/<a:clrScheme[\s\S]*?<\/a:clrScheme>/)||[''])[0]).matchAll(/<a:(?:dk1|lt1|dk2|lt2|accent\d|hlink|folHlink)>([\s\S]*?)<\/a:\w+>/g)].map(m=>((m[1].match(/(?:lastClr|val)="([0-9A-Fa-f]{6})"/)||[,'000000'])[1]).toUpperCase());
+const fl=[...((sty.match(/<fills[\s\S]*?<\/fills>/)||[''])[0]).matchAll(/<fill>([\s\S]*?)<\/fill>/g)].map(m=>{if(!/patternType="solid"/.test(m[1]))return null;
+const c=(/<fgColor ([^>]*?)\/>/.exec(m[1])||[])[1];if(!c)return null;const rgb=at(c,'rgb'),th=at(c,'theme');
+return rgb?rgb.slice(-6).toUpperCase():th!=null?tint(TH[[1,0,3,2][+th]??+th]||'FFFFFF',parseFloat(at(c,'tint')||0)):null});
+XC=(((sty.match(/<cellXfs[\s\S]*?<\/cellXfs>/)||[''])[0]).match(/<xf [^>]*?(?:\/>|>[\s\S]*?<\/xf>)/g)||[]).map(x=>fl[+at(x,'fillId')]||null).map(c=>c=='FFFFFF'?null:c);
+S('Lendo textos compartilhados...');await tick();const ss=await rd('xl/sharedStrings.xml');
+SST=[...ss.matchAll(/<si>([\s\S]*?)<\/si>/g)].map(m=>un([...m[1].replace(/<rPh[\s\S]*?<\/rPh>/g,'').matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(x=>x[1]).join('')));
+SH={};COLORS={};let log='';
+for(const t of TABS){const s=names.find(x=>norm(x.n)==norm(t));if(!s||!Z.file(s.p)){log+=`<div class="bad">✖ ${t}: aba não encontrada</div>`;continue}
+S(log+`Lendo "${t}"...`);await tick();SH[t]=psheet(await Z.file(s.p).async('string'));log+=`<div class="ok">✔ ${t}: ${SH[t].size} linhas lidas</div>`}
+S(log);BLUE=new Set(Object.keys(COLORS).filter(isBlue));chips();rcfg();$('s2').hidden=false;$('s3').hidden=true}
+catch(e){S('<span class="bad">Erro ao ler o arquivo: '+esc(e.message)+'</span>');console.error(e)}}
+
+function chips(){$('chips').innerHTML=Object.entries(COLORS).sort((a,b)=>b[1]-a[1]).map(([c,n])=>`<span class="chip ${BLUE.has(c)?'on':''}" data-c="${c}"><i style="background:#${c}"></i>#${c} (${n} células)</span>`).join('')||'<span class="m">Nenhuma cor de preenchimento encontrada.</span>'}
+function rcfg(){let h='<table class="g"><tr><th>Aba'+F.map(f=>'<th>'+f[1]).join('')+'<th></tr>';
+for(const t of TABS){if(!SH[t])continue;CFG[t].forEach((s,i)=>{h+=`<tr><td>${i?'':t}`+F.map(([k])=>`<td><input data-t="${t}" data-i="${i}" data-k="${k}" value="${esc(s[k])}" class="${['man','base','pis','cof'].includes(k)?'w':'n'}">`).join('')+
+`<td>${CFG[t].length>1?`<button data-x="${t}|${i}">×</button>`:''}${i==CFG[t].length-1?`<button data-p="${t}">+ seção</button>`:''}</tr>`})}$('cfg').innerHTML=h+'</table>'}
+
+function build(){RECS=[];const cm=new Map,tol=num($('tol').value)||0.02,IH=$('ih').checked;
+for(const tab of TABS){const S=SH[tab];if(!S)continue;
+for(const sec of CFG[tab]){const c1=c2n(sec.c1||'A');let c2=sec.c2?c2n(sec.c2):0,names=[];const hr=S.R.get(+sec.h);
+if(sec.man){names=sec.man.split(';').map(s=>s.trim());if(!c2)c2=c1+names.length-1}
+else if(hr){if(!c2)c2=Math.max(c1,...Object.keys(hr.v).map(Number).filter(k=>k>=c1&&String(hr.v[k]).trim()!==''));
+const seen={};for(let c=c1;c<=c2;c++){let n=String(hr.v[c]??'').trim()||'Coluna '+n2c(c);seen[n]=(seen[n]||0)+1;names.push(seen[n]>1?`${n} (${seen[n]})`:n)}}
+else continue;
+const nk=names.map(norm),fi=k=>nk.indexOf(norm(k)),ib=fi(sec.base),ip=fi(sec.pis),ic=fi(sec.cof),last=+sec.b||Math.max(...S.R.keys()),rp=num(sec.rp),rc=num(sec.rc);
+for(let r=+sec.a;r<=last;r++){const row=S.R.get(r);if(!row||(IH&&row.h)||!row.f.some(([c,col])=>c>=c1&&c<=c2&&BLUE.has(col)))continue;
+const d={};names.forEach((n,i)=>{const v=row.v[c1+i];if(v!==undefined&&v!=='')d[nk[i]]=v;if(!cm.has(nk[i]))cm.set(nk[i],n)});
+const L=sec.lab?(S.R.get(+sec.lab)?.v[c1]??''):'';if(L!==''){d['rotulo do bloco']=L;cm.set('rotulo do bloco','Rótulo do bloco')}
+const nm=i=>i<0?0:num(row.v[c1+i]);const o={aba:tab,linha:r,d,base:nm(ib),pis:nm(ip),cof:nm(ic)};
+o.ep=o.base*rp/100;o.ec=o.base*rc/100;o.dp=o.pis-o.ep;o.dc=o.cof-o.ec;
+o.st=ib<0||ip<0||ic<0?'Sem dados':(Math.abs(o.dp)>tol||Math.abs(o.dc)>tol)?'Divergente':'OK';
+const g=k=>{const v=d[norm(k)];return v==null?'':String(v).trim()};const doc=g('Documento');
+o.dk=doc?[doc,g('Serie'),g('Forn/Cliente'),g('Loja')].join('|'):'';o.ik=o.dk?o.dk+'|'+g('Item NF'):'';RECS.push(o)}}}
+const ci={},da={};RECS.forEach(o=>{if(o.ik)ci[o.ik]=(ci[o.ik]||0)+1;if(o.dk)(da[o.dk]=da[o.dk]||new Set).add(o.aba)});
+RECS.forEach(o=>{o.dup=!!o.ik&&ci[o.ik]>1;o.mx=o.dk?[...da[o.dk]].filter(t=>t!=o.aba).join(', '):''});
+COLS=[...cm];UC=COLS.filter(([k])=>RECS.some(o=>k in o.d))}
+
+function resumoTot(){const S=SH['Resumo'];if(!S)return null;
+for(const[r,row]of S.R){const E=Object.entries(row.v),nx=S.R.get(r+1);if(!nx||!E.some(([c,v])=>norm(v)=='total'))continue;
+const cs=E.filter(([c,v])=>/^(total|pis|cofins)$/.test(norm(v)));if(cs.length==3){const o={};cs.forEach(([c,v])=>o[norm(v)]=num(nx.v[c]));return o}}return null}
+function agg(){const T={};TABS.forEach(t=>T[t]={n:0,b:0,p:0,c:0,v:0,d:0});
+RECS.forEach(o=>{const a=T[o.aba];a.n++;a.b+=o.base;a.p+=o.pis;a.c+=o.cof;a.v+=o.st=='Divergente';a.d+=o.dup});return T}
+const tot=T=>Object.values(T).reduce((s,a)=>({n:s.n+a.n,b:s.b+a.b,p:s.p+a.p,c:s.c+a.c,v:s.v+a.v,d:s.d+a.d}),{n:0,b:0,p:0,c:0,v:0,d:0});
+
+function render(){const T=agg(),X=tol=num($('tol').value)||0.02,G=tot(T);
+$('cards').innerHTML=[['Registros azuis',G.n],['Base de cálculo (R$)',fm(G.b)],['PIS (R$)',fm(G.p)],['COFINS (R$)',fm(G.c)],['Total de créditos (R$)',fm(G.p+G.c)],['Divergências de cálculo',G.v],['Registros duplicados',G.d]].map(([a,b])=>`<div class="k">${a}<b>${b}</b></div>`).join('');
+$('ab').innerHTML='<table class="g"><tr><th>Aba<th>Registros<th>Base (R$)<th>PIS (R$)<th>COFINS (R$)<th>Total (R$)<th>Divergências<th>Duplicados</tr>'+TABS.filter(t=>SH[t]).map(t=>{const a=T[t];return`<tr><td>${t}<td class="r">${a.n}<td class="r">${fm(a.b)}<td class="r">${fm(a.p)}<td class="r">${fm(a.c)}<td class="r">${fm(a.p+a.c)}<td class="r ${a.v?'bad':''}">${a.v}<td class="r ${a.d?'bad':''}">${a.d}</tr>`}).join('')+`<tr><th>Total<th class="r">${G.n}<th class="r">${fm(G.b)}<th class="r">${fm(G.p)}<th class="r">${fm(G.c)}<th class="r">${fm(G.p+G.c)}<th class="r">${G.v}<th class="r">${G.d}</tr></table>`;
+const rr=resumoTot(),R=T['Resumo'];
+$('ck').innerHTML=rr?'<table class="g"><tr><th>Item<th>Linha "Total" da aba Resumo<th>Registros azuis da aba Resumo<th>Diferença</tr>'+[['Valor do mês (base)',rr.total,R.b],['PIS',rr.pis,R.p],['COFINS',rr.cofins,R.c]].map(([n,a,b])=>`<tr><td>${n}<td class="r">${fm(a)}<td class="r">${fm(b)}<td class="r ${Math.abs(a-b)>X?'bad':'ok'}">${fm(a-b)}</tr>`).join('')+'</table>':'<span class="m">Linha "Total" não localizada na aba Resumo (ou aba ausente).</span>';
+const sel=$('fa'),cur=sel.value;sel.innerHTML='<option value="">Todas</option>'+TABS.filter(t=>T[t].n).map(t=>`<option>${t}</option>`).join('');sel.value=cur;rows()}
+function rows(){const a=$('fa').value,q=norm($('q').value),fd=$('fd').checked,fu=$('fu').checked;
+const L=RECS.filter(o=>(!a||o.aba==a)&&(!fd||o.st=='Divergente')&&(!fu||o.dup)&&(!q||(o.s=o.s||norm(Object.values(o.d).join(' '))).includes(q)));
+const fv=v=>typeof v=='number'?v.toLocaleString('pt-BR',{maximumFractionDigits:4}):esc(v);
+$('cnt').textContent=`${L.length} registros${L.length>300?' (exibindo 300; a exportação traz todos)':''}`;
+$('tbl').innerHTML='<tr><th>Aba de origem<th>Linha no Excel'+UC.map(c=>'<th>'+esc(c[1])).join('')+'<th>Base<th>PIS<th>COFINS<th>Status<th>Duplicado</tr>'+
+L.slice(0,300).map(o=>`<tr><td>${o.aba}<td>${o.linha}`+UC.map(([k])=>'<td>'+fv(o.d[k]??'')).join('')+`<td class="r">${fm(o.base)}<td class="r">${fm(o.pis)}<td class="r">${fm(o.cof)}<td class="${o.st=='Divergente'?'bad':''}">${o.st}<td class="${o.dup?'bad':''}">${o.dup?'Sim':'Não'}</tr>`).join('')}
+
+const CH=['Base de cálculo (padronizada)','PIS (planilha)','COFINS (planilha)','PIS esperado','COFINS esperado','Diferença PIS','Diferença COFINS','Status do cálculo','Registro duplicado','Mesmo documento também em'];
+const chk=o=>[o.base,o.pis,o.cof,o.ep,o.ec,o.dp,o.dc,o.st,o.dup?'Sim':'Não',o.mx];
+async function exp(){const wb=new ExcelJS.Workbook();
+const sh=(n,H,rs)=>{const ws=wb.addWorksheet(n.slice(0,31));ws.addRow(H);rs.forEach(r=>ws.addRow(r));const h=ws.getRow(1);h.font={bold:true,color:{argb:'FFFFFFFF'}};h.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF1F4E79'}};
+ws.views=[{state:'frozen',ySplit:1}];ws.autoFilter={from:{row:1,column:1},to:{row:1,column:H.length}};H.forEach((x,i)=>{const c=ws.getColumn(i+1);c.width=Math.min(40,Math.max(11,String(x).length+3));c.numFmt='#,##0.00'});ws.getColumn(2).numFmt='0';return ws};
+const line=(cols,o)=>[o.aba,o.linha,...cols.map(([k])=>o.d[k]??''),...chk(o)];
+const T=agg(),G=tot(T);
+const ws=sh('Resumo por aba',['Aba','Registros','Base (R$)','PIS (R$)','COFINS (R$)','Total de créditos (R$)','Divergências','Duplicados'],[...TABS.filter(t=>SH[t]).map(t=>{const a=T[t];return[t,a.n,a.b,a.p,a.c,a.p+a.c,a.v,a.d]}),['Total',G.n,G.b,G.p,G.c,G.p+G.c,G.v,G.d]]);
+ws.getColumn(2).numFmt='0';ws.getColumn(7).numFmt='0';ws.getColumn(8).numFmt='0';ws.getColumn(1).width=22;ws.getRow(ws.rowCount).font={bold:true};
+const rr=resumoTot();if(rr){ws.addRow([]);ws.addRow(['Comparação com a aba Resumo','Linha Total (Resumo)','Registros azuis (Resumo)','Diferença']).font={bold:true};
+[['Valor do mês (base)',rr.total,T.Resumo.b],['PIS',rr.pis,T.Resumo.p],['COFINS',rr.cofins,T.Resumo.c]].forEach(([n,a,b])=>ws.addRow([n,a,b,a-b]))}
+sh('Consolidado',['Aba de origem','Linha no Excel',...UC.map(c=>c[1]),...CH],RECS.map(o=>line(UC,o)));
+for(const t of TABS){const rs=RECS.filter(o=>o.aba==t);if(!rs.length)continue;const cols=UC.filter(([k])=>rs.some(o=>k in o.d));
+sh(t,['Aba de origem','Linha no Excel',...cols.map(c=>c[1]),...CH],rs.map(o=>line(cols,o)))}
+const buf=await wb.xlsx.writeBuffer(),a=document.createElement('a');a.href=URL.createObjectURL(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));a.download='Consolidado_PIS_COFINS.xlsx';a.click()}
+
+async function go(){$('go').textContent='Consolidando...';await tick();build();render();$('s3').hidden=false;$('go').textContent='Consolidar';}
+$('f').onchange=e=>e.target.files[0]&&load(e.target.files[0]);
+$('go').onclick=go;$('ex').onclick=()=>exp().catch(e=>alert('Erro ao exportar: '+e.message));
+['fa','fd','fu'].forEach(i=>$(i).onchange=rows);$('q').oninput=rows;
+$('chips').onclick=e=>{const c=e.target.closest('.chip');if(!c)return;const k=c.dataset.c;BLUE.has(k)?BLUE.delete(k):BLUE.add(k);chips();if(RECS.length)go()};
+$('cfg').oninput=e=>{const d=e.target.dataset;if(d.k)CFG[d.t][+d.i][d.k]=e.target.value.trim()};
+$('cfg').onclick=e=>{const d=e.target.dataset;if(d.x){const[t,i]=d.x.split('|');CFG[t].splice(+i,1);rcfg()}else if(d.p){CFG[d.p].push({...STD});rcfg()}};
+</script></body></html>

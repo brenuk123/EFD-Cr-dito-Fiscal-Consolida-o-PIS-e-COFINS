@@ -1,0 +1,6 @@
+{
+  "summary":  "Plano de implementação completo para o Sistema de Consolidação e Auditoria Fiscal de Créditos de PIS e COFINS (EFD Contribuições), contemplando leitura avançada de estilos/cores de células Excel (.xlsx), regras parametrizáveis por aba e seção, conferência automática contra a aba Resumo, revisão manual de divergências e linhas, salvamento local de perfis e histórico mensal, e exportação multipágina com abas de auditoria.",
+  "updatedAt":  "2026-10-27T14:25:58.703487442Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}
